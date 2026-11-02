@@ -1,0 +1,9 @@
+title: Curious Why
+description: Notes on things I'm learning, building, and trying to understand.
+url: "https://simplyjaga.github.io"
+baseurl: ""
+
+markdown: kramdown
+permalink: /blog/:year/:month/:day/:title/
+
+plugins: []
