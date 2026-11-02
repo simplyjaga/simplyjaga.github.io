@@ -1,0 +1,17 @@
+---
+layout: default
+---
+<article class="article">
+  <header class="article-header">
+    <p class="eyebrow">
+      {% if page.categories.size > 0 %}{{ page.categories | join: " · " }}{% endif %}
+      {% if page.date %}{% if page.categories.size > 0 %} · {% endif %}{{ page.date | date: "%b %-d, %Y" }}{% endif %}
+    </p>
+    <h1>{{ page.title | escape }}</h1>
+    {% if page.description %}<p class="article-description">{{ page.description | escape }}</p>{% endif %}
+  </header>
+
+  <div class="prose">
+    {{ content }}
+  </div>
+</article>
