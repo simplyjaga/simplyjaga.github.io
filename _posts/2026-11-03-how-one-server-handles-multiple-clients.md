@@ -3,93 +3,70 @@ layout: post
 title: "How Can One Server Handle Multiple Clients?"
 date: 2026-11-03
 categories: [Systems]
-description: "Understanding concurrent client requests, why a simple blocking server gets stuck, and the approaches we can use to serve multiple clients."
+description: "Follow a client request from its machine to the server, and understand why a blocking server gets stuck on one client."
 ---
 
-Imagine a server with three clients connected to it. All three clients want to send a request and receive a response.
+Imagine three clients connecting to our server. Each client wants to send data and receive a response.
 
-How should the server handle them?
+Our current server handles one client at a time. Let's follow what happens when a client sends data, then see why this becomes a problem.
 
-At first, this sounds like a simple networking problem. The server accepts a connection, reads a request, processes it, and sends a response. We have already built a server that does exactly this.
+## What happens when a client sends data?
 
-But there is a catch: **what happens when multiple clients want the server's attention at the same time?**
+Suppose Client A sends the bytes `PING` to our server.
 
-Let's understand the problem before looking at the solution.
+The data travels through several steps:
 
-## What do we mean by concurrent requests?
+1. Our client program calls `send()` on its socket.
+2. The client's operating system takes the bytes, handles the TCP/IP networking work, and sends packets through the network interface.
+3. Those packets travel across the network to the server machine.
+4. The server's network interface receives them. The server operating system processes the packets and places the received data in the socket's receive buffer.
+5. Our server program calls `recv()` to read from that socket. If no data has arrived yet, a blocking `recv()` makes the server wait. When data arrives, the operating system wakes the waiting server, and `recv()` returns the available bytes.
 
-For this discussion, let's keep the setup deliberately small:
+So the application does not read directly from the network cable. The operating system receives network data and makes it available through the socket. Our program reads it using socket operations such as `recv()`.
 
-- One server
-- Three clients: Client A, Client B, and Client C
-- One CPU core executing the server
-- No multi-core parallelism and no additional worker threads
+## Why does our server get stuck?
 
-Each client sends a request and expects a response. The requests may arrive close together, and the server may need to wait for data from a client before it can do useful work for that client.
+Our first TCP server follows this flow:
 
-The important distinction is between **concurrency** and **parallelism**.
+1. Call `accept()` and wait for a client connection.
+2. Call `recv()` to read from that client.
+3. Process the data and send a response.
+4. Keep handling that client until it disconnects.
+5. Go back to `accept()` for another client.
 
-Concurrency means the server can make progress on multiple clients' work during overlapping periods. It does not mean that the CPU executes instructions for all three clients at the exact same instant.
+Now imagine Client A connects, but does not send any data yet.
 
-With one CPU core, only one instruction stream is executing at a time. The server can still handle multiple clients concurrently by switching its attention between them: it can work on a client whose data is ready, then move to another while the first client is waiting for more network data.
+Our server calls `recv()` for Client A. Because the socket is blocking and no data has arrived, the server waits there.
 
-That is the behaviour we want to understand.
+Meanwhile, Client B and Client C connect and send data. Their machines send the data through the network, and the server's operating system receives it and places it in their respective socket buffers.
 
-## The problem with handling clients one by one
+But our server program is still waiting inside the `recv()` for Client A. It has not returned to `accept()` to take Client B or Client C, so it cannot read their data yet.
 
-Our first TCP server follows a straightforward, blocking approach:
+**The operating system has received their data, but our application is not getting a chance to process it.**
 
-1. Wait for a client to connect using `accept()`.
-2. Read data from that client's socket.
-3. Process the data and write a response.
-4. Continue handling that client until it disconnects.
-5. Only then return to `accept()` and take the next client.
+That's the problem with this design: waiting for one client's data stops the server from handling other clients.
 
-This works perfectly well when there is only one client.
-
-Now imagine Client A connects and then waits before sending its next request. The server is blocked waiting for data from Client A. Meanwhile, Client B and Client C also connect and send requests.
-
-The server cannot get back to its `accept()` call, because it is still inside the code handling Client A. The operating system can complete the TCP handshakes and queue connections, but our application is not accepting and servicing those clients yet.
-
-So Client B and Client C have to wait—even if their requests are already waiting to be read.
-
-The issue is not that the server has too little processing power. The issue is that **one blocking operation on one client's socket prevents the server from making progress on the others.**
-
-Arpit Bhayani demonstrates this limitation in his walkthrough of a synchronous TCP echo server:
+Arpit Bhayani demonstrates this one-client-at-a-time behaviour in his synchronous TCP server walkthrough:
 
 - [Building a Simple Synchronous TCP Echo Server](https://edge.arpitbhayani.me/videos/building-simple-tcp-echo-server-redis-internals)
 
-## What should the server do instead?
+## What do we want instead?
 
-We want the server to keep track of all three client connections and make progress on whichever client is ready.
+We want the server to handle whichever client has data ready, rather than wait for one particular client.
 
 For example:
 
-- Client A sends a request. The server reads and processes it.
-- While Client A is waiting for its response or for its next request, Client B becomes ready. The server handles Client B.
-- Client C becomes ready next. The server handles Client C.
-- Later, if Client A has more data ready, the server comes back to it.
+- Client A has no data yet, so the server should not remain stuck waiting for A.
+- Client B has sent data, so the server reads and handles B's request.
+- Client C has also sent data, so the server handles C.
+- When A's data arrives, the server handles A too.
 
-The work is interleaved. The server does not need three CPU cores to make progress on three network connections.
+To do this, the server needs a way to wait for activity across multiple client sockets and find out which ones are ready to read.
 
-There are several ways to build a server that supports multiple clients:
+One way to build this is an **event loop with non-blocking sockets**. The operating system can report when sockets are ready, and the server can read from those sockets instead of blocking on just one client.
 
-- **A thread or process per client:** give each connection its own execution context. The operating system schedules those contexts.
-- **A thread pool:** accept connections and distribute their work among a bounded set of worker threads.
-- **An event loop with non-blocking I/O:** use the operating system to notify the server when a socket is ready, then handle the ready connections from a central loop.
+We'll explore that approach next, following the same path from the socket and operating-system behaviour to the event-loop code.
 
-Each approach has different trade-offs. For this exploration, we'll focus on the event-loop approach.
-
-Arpit's event-loop walkthrough is a useful companion to the synchronous-server video:
+Arpit's event-loop walkthrough is a useful companion:
 
 - [Event Loops Internals: How Redis Handles Concurrent Connections on a Single Thread](https://arpitbhayani.me/videos/event-loops-internals-redis-concurrent-connections)
-
-## What we are going to explore
-
-We'll build our understanding from the same small setup: **three clients, one server, and one CPU core**.
-
-We'll first understand what it means for a socket to be non-blocking, why the server needs to know which sockets are ready, and how the operating system helps it wait for events instead of getting stuck on one client.
-
-Then we'll explore how an event loop uses those notifications to serve multiple clients by interleaving their work.
-
-We'll leave multi-core event-loop designs for a later discussion. For now, the goal is to understand how one execution thread can handle multiple concurrent connections without processing all of them in parallel.
