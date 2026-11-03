@@ -4,13 +4,25 @@ title: "How Can One Server Handle Multiple Clients?"
 date: 2026-11-03
 categories: [Systems]
 description: "Follow a client request through the operating system and understand why a blocking server gets stuck on one client."
+toc:
+  - title: "How Can One Server Handle Multiple Clients?"
+    url: "#article-start"
+    children:
+      - title: "What happens when a client sends data?"
+        url: "#what-happens-when-a-client-sends-data"
+      - title: "Why does a blocking server get stuck?"
+        url: "#why-does-a-blocking-server-get-stuck"
+      - title: "What do we need instead?"
+        url: "#what-do-we-need-instead"
+      - title: "The system calls and the programming language"
+        url: "#the-system-calls-and-the-programming-language"
 ---
 
 An event loop allows a server to handle many client connections without waiting for each client one at a time. To understand how it works, we first need to see what happens when data travels from a client to a server.
 
 This post explores that flow and then builds towards the event-loop model.
 
-## What happens when a client sends data?
+## What happens when a client sends data? {#what-happens-when-a-client-sends-data}
 
 Suppose Client A sends the bytes `PING` to a server.
 
@@ -24,7 +36,7 @@ The data travels through several steps:
 
 The application does not read directly from the network interface. The operating system receives the network data and makes it available through the socket. The application accesses it through the socket API.
 
-## Why does a blocking server get stuck?
+## Why does a blocking server get stuck? {#why-does-a-blocking-server-get-stuck}
 
 Consider a simple server that handles one client at a time:
 
@@ -46,7 +58,7 @@ But the server program is still waiting inside the `recv()` call for Client A. I
 
 That's the limitation of this design: waiting for one client's data prevents the server from handling other clients.
 
-## What do we need instead?
+## What do we need instead? {#what-do-we-need-instead}
 
 We want the server to find out which client sockets are ready for I/O, rather than block while waiting for one particular client.
 
@@ -59,7 +71,7 @@ For example:
 
 An **event loop** provides a way to organise this. It waits for activity on multiple sockets and handles the sockets that are ready. Non-blocking I/O is an important part of this approach.
 
-## The system calls and the programming language
+## The system calls and the programming language {#the-system-calls-and-the-programming-language}
 
 The operating system provides interfaces for operations such as creating sockets, accepting connections, sending and receiving data, and waiting for socket events.
 
