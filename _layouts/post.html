@@ -1,17 +1,72 @@
 ---
 layout: default
 ---
-<article class="article">
-  <header class="article-header">
-    <p class="eyebrow">
-      {% if page.categories.size > 0 %}{{ page.categories | join: " · " }}{% endif %}
-      {% if page.date %}{% if page.categories.size > 0 %} · {% endif %}{{ page.date | date: "%b %-d, %Y" }}{% endif %}
-    </p>
-    <h1>{{ page.title | escape }}</h1>
-    {% if page.description %}<p class="article-description">{{ page.description | escape }}</p>{% endif %}
-  </header>
+<div class="article-layout">
+  <aside class="article-toc" id="article-toc">
+    <button class="toc-toggle" type="button" aria-expanded="false" aria-controls="toc-navigation">
+      <span class="toc-menu-icon" aria-hidden="true">☰</span>
+      <span>On this page</span>
+    </button>
+    <nav class="toc-navigation" id="toc-navigation" aria-label="Table of contents">
+      <p class="toc-heading">IN THIS SECTION</p>
+      <ul>
+        {% for item in page.toc %}
+          <li class="toc-section">
+            <a class="toc-section-link" href="{{ item.url }}">{{ item.title | escape }}</a>
+            {% if item.children %}
+              <ul class="toc-subsections">
+                {% for child in item.children %}
+                  <li><a href="{{ child.url }}">{{ child.title | escape }}</a></li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </nav>
+  </aside>
 
-  <div class="prose">
-    {{ content }}
-  </div>
-</article>
+  <article class="article">
+    <header class="article-header">
+      <p class="eyebrow">
+        {% if page.categories.size > 0 %}{{ page.categories | join: " · " }}{% endif %}
+        {% if page.date %}{% if page.categories.size > 0 %} · {% endif %}{{ page.date | date: "%b %-d, %Y" }}{% endif %}
+      </p>
+      <h1 id="article-start">{{ page.title | escape }}</h1>
+      {% if page.description %}<p class="article-description">{{ page.description | escape }}</p>{% endif %}
+    </header>
+
+    <div class="prose">
+      {{ content }}
+    </div>
+  </article>
+</div>
+
+<script>
+  (() => {
+    const sidebar = document.getElementById("article-toc");
+    const toggle = sidebar?.querySelector(".toc-toggle");
+    const navigation = sidebar?.querySelector(".toc-navigation");
+
+    if (!sidebar || !toggle || !navigation) return;
+
+    toggle.addEventListener("click", () => {
+      const isOpen = sidebar.classList.toggle("is-open");
+      toggle.setAttribute("aria-expanded", String(isOpen));
+    });
+
+    navigation.addEventListener("click", (event) => {
+      if (event.target.closest("a")) {
+        sidebar.classList.remove("is-open");
+        toggle.setAttribute("aria-expanded", "false");
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        sidebar.classList.remove("is-open");
+        toggle.setAttribute("aria-expanded", "false");
+      }
+    });
+  })();
+</script>
