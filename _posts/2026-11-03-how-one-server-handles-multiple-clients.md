@@ -27,6 +27,8 @@ toc:
         url: "#why-must-sockets-be-non-blocking"
       - title: "How does the event loop handle clients?"
         url: "#how-does-the-event-loop-handle-clients"
+      - title: "What if more sockets are ready than we can process?"
+        url: "#what-if-more-sockets-are-ready-than-we-can-process"
       - title: "Can we build this in Python?"
         url: "#can-we-build-this-in-python"
   - title: "How Do Real Servers Use Event Loops?"
@@ -161,6 +163,21 @@ Let's follow one pass through the loop.
 5. Go back to waiting.
 
 That's the whole pattern: **wait, handle what's ready, repeat**.
+
+### What if more sockets are ready than we can process? {#what-if-more-sockets-are-ready-than-we-can-process}
+
+Imagine 50 client sockets become ready at roughly the same time. The OS reports ready sockets to the event loop, and the loop processes the events returned by its polling call. It doesn't need to inspect every connected socket itself.
+
+Now suppose another 60 sockets become ready while the loop is handling that first group. The loop finishes its current batch and asks the OS for events again. It can then receive those newly ready sockets too.
+
+There are two details worth understanding:
+
+- **The OS doesn't promise one giant list containing every ready socket.** Linux's `epoll_wait()` accepts a maximum number of events to return in one call. If more descriptors are ready, the remaining ones can be returned by later calls. Python's `selectors` API hides that low-level limit in our example.
+- **A socket that still has unread data remains ready in the usual level-triggered mode.** Linux epoll uses level-triggered mode by default, so if a socket wasn't handled in one batch—or still has data after a partial read—it can be reported again on a later wait. Edge-triggered mode has different rules: the application generally needs to keep reading until it gets `EAGAIN` (reported as `BlockingIOError` in Python).
+
+What about fairness? The event loop must not spend all its time on one busy client. A practical server limits how much work it does for one connection in a single turn—for example, a maximum number of bytes or messages—then moves on to other ready connections. Readiness notification alone does not guarantee fair application-level processing.
+
+In our small Python example, each callback reads at most 1024 bytes and then returns to the loop. That keeps the work per event small. A production server needs more deliberate buffering and per-connection work limits.
 
 Now let's build it. Rather than presenting a large finished program and explaining it afterwards, we'll add each part when the story needs it.
 
