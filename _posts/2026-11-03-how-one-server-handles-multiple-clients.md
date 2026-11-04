@@ -395,22 +395,16 @@ To use multiple cores, servers commonly run **multiple worker processes**. Each 
 
 For example, on a machine with four available CPU cores, a server might start several worker processes:
 
-~~~text
-                 Incoming connections
-                         |
-              Operating system distributes
-                  connections to workers
-                  /      |      |      \
-                 v       v      v       v
-              Worker  Worker Worker  Worker
-                1       2      3       4
-                |       |      |       |
-              Loop 1  Loop 2 Loop 3  Loop 4
-                |       |      |       |
-              Core 1  Core 2 Core 3  Core 4
-~~~
+| Worker process | What runs inside it |
+|---|---|
+| Worker 1 | Event loop 1 |
+| Worker 2 | Event loop 2 |
+| Worker 3 | Event loop 3 |
+| ... | ... |
 
-This is broadly how Nginx is structured: a master process starts and manages worker processes, and each worker handles connections using an event-driven loop. Each worker runs its own event loop and manages the connections assigned to it. The operating system schedules those processes across the available CPU cores; workers are not necessarily pinned to one particular core.
+The operating system schedules these worker processes across the available CPU cores.
+
+In Nginx, a master process starts and manages worker processes. Each worker runs its own event loop and accepts or handles client connections. The operating system schedules runnable workers across available CPU cores; a worker is not necessarily pinned to one particular core. The table is a simplified view: the exact way connections are distributed depends on the server configuration and operating-system behavior.
 
 The exact way connections reach workers depends on the server. A parent process might accept connections and pass them to workers, or workers might share a listening socket and let the operating system distribute incoming connections.
 
