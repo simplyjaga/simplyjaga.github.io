@@ -316,13 +316,7 @@ This is one reason event-driven I/O is useful at the web-server layer: many clie
 
 The web server usually doesn't contain all the business logic of an application. It forwards the request to an **application server**, such as a Java application running on Tomcat or a Python application served by Gunicorn.
 
-The application server is responsible for running the application:
-
-- Calling application code.
-- Reading or updating data.
-- Applying business rules.
-- Communicating with databases or other services.
-- Producing the response that will be sent back to the client.
+Tomcat, for example, can run a Java servlet that checks the request, calls application code, reads or updates a database, and builds the HTTP response. A Python application served by Gunicorn follows the same broad idea: application code handles the request and produces a response.
 
 The web server and application server communicate over another network connection. They might run on the same machine using different ports, or on separate machines.
 
@@ -379,13 +373,15 @@ An event loop takes a different approach:
 
 This can support many concurrent I/O connections with far fewer threads.
 
-But an event loop is not automatically better in every situation:
+Let's make the trade-off concrete.
 
-- **Event loops** are effective when work involves lots of concurrent I/O and handlers spend much of their time waiting.
-- **Threads** can make blocking code easier to write and can be a good fit when the workload and connection count are manageable.
-- **CPU-heavy work** is different. If an event-loop handler spends a long time calculating, it prevents that loop from handling other events until it finishes.
+- **Event loop:** Nginx may keep thousands of client connections open, even though most clients are idle or only occasionally sending data. An event-driven worker can watch those sockets without dedicating one thread to every connection.
+- **Threads:** A traditional Tomcat application can assign incoming servlet requests to a pool of worker threads. The code can use ordinary blocking JDBC calls; while one thread waits for the database, other threads can handle other requests.
+- **CPU-heavy work:** Imagine a Python async server that generates a large PDF or resizes a batch of images directly inside an event-loop handler. While that calculation runs, the loop cannot handle another socket event. A common solution is to send that job to a process pool and let the event loop continue handling network I/O.
 
-So the choice is not simply "event loops are faster than threads." It depends on the workload, the runtime, and how the application is structured. Many real systems combine both: an event loop for network I/O and a thread or process pool for work that should not run on the event-loop thread. The same rule applies to database calls: if an application uses a blocking database client directly on the event-loop thread, that call can stall the loop too. It needs an asynchronous client or to run outside the loop.
+The same issue appears with database access: if an async handler makes a blocking database call on the event-loop thread, the loop stalls until the call returns. Use an asynchronous database client, or run the blocking call in a worker thread instead.
+
+So the choice is not "event loops are always faster." Nginx's connection handling, a Tomcat request worker, and a CPU-heavy image-processing job have different needs. Real systems often combine event loops with thread or process pools.
 
 ### Can one event loop use multiple CPU cores? {#can-one-event-loop-use-multiple-cpu-cores}
 
