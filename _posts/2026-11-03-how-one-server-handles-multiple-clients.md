@@ -1,12 +1,12 @@
 ---
 layout: post
-title: "How Can One Server Handle Multiple Clients?"
+title: "From Blocking Sockets to Event Loops"
 date: 2026-11-03
 categories: [Systems]
-description: "From blocking sockets to event loops: how real servers handle many clients and use multiple CPU cores."
+description: "How servers manage many connections, why event loops help, and how worker processes use multiple CPU cores."
 toc:
   - title: "How Can One Server Handle Multiple Clients?"
-    url: "#article-start"
+    url: "#how-can-one-server-handle-multiple-clients"
     children:
       - title: "How does data reach the server?"
         url: "#how-does-data-reach-the-server"
@@ -48,7 +48,9 @@ A server can have many clients connected at the same time. But how does one serv
 
 Let's start with what happens when a client sends data.
 
-## How does data reach the server? {#how-does-data-reach-the-server}
+## How Can One Server Handle Multiple Clients? {#how-can-one-server-handle-multiple-clients}
+
+### How does data reach the server? {#how-does-data-reach-the-server}
 
 Suppose Client A sends \`PING\`.
 
@@ -59,7 +61,7 @@ Suppose Client A sends \`PING\`.
 
 The application does not read directly from the network interface. The operating system receives the network data; the application accesses it through the socket.
 
-## Why does a blocking server get stuck? {#why-does-a-blocking-server-get-stuck}
+### Why does a blocking server get stuck? {#why-does-a-blocking-server-get-stuck}
 
 Imagine a simple server that handles one client from beginning to end:
 
@@ -77,7 +79,7 @@ While it waits, Clients B and C connect and send data. Their data can reach the 
 
 The problem isn't that the operating system cannot receive multiple connections. It's that our application is waiting on one socket at a time.
 
-## What should the server do instead? {#what-should-the-server-do-instead}
+### What should the server do instead? {#what-should-the-server-do-instead}
 
 What if the server could ask:
 
@@ -87,7 +89,7 @@ Then it wouldn't have to call \`recv()\` on A and wait. It could read B if B has
 
 That's the central idea behind an **event loop**: wait for activity across many sockets, then handle the sockets that are ready.
 
-## Which parts belong to the OS and Python? {#which-parts-belong-to-the-os-and-python}
+### Which parts belong to the OS and Python? {#which-parts-belong-to-the-os-and-python}
 
 Creating sockets, accepting connections, sending and receiving bytes, and waiting for I/O readiness all rely on operating-system facilities.
 
@@ -139,7 +141,7 @@ We can use that interface to learn the event loop without writing Linux-specific
 
 Suppose the OS reports that Client B is ready to read. Before our program calls \`recv()\`, the available data might be consumed or the socket's state might change.
 
-If the socket is blocking, a read that can no longer make progress could make our event-loop thread wait on B. That would bring back the very problem we're trying to avoid.
+Readiness is a snapshot, not a promise. The socket's state can change before the read happens—for example, another thread may consume the available data. If the socket is blocking, our event-loop thread could then wait on B, bringing back the very problem we're trying to avoid.
 
 A non-blocking socket behaves differently: if an operation cannot proceed immediately, it returns instead of waiting. In Python, that situation is reported as \`BlockingIOError\`.
 
@@ -355,8 +357,8 @@ An event loop takes a different approach:
 1. Keep track of many sockets.
 2. Ask the operating system which ones are ready.
 3. Run the handler for a ready socket.
-4. When a handler reaches an asynchronous wait, let other work proceed.
-5. Return to the first handler when its I/O is ready.
+4. If more I/O is needed, don't block the event-loop thread waiting for it. Return to the loop so it can handle other ready sockets.
+5. When the OS reports that more data is ready, continue that connection's work. Async runtimes can suspend and resume coroutines; callback-based loops keep the connection's state separately.
 
 This can support many concurrent I/O connections with far fewer threads.
 
@@ -378,7 +380,7 @@ A single event loop usually runs on one thread. At any given moment, that thread
 
 To use multiple cores, servers commonly run **multiple worker processes**. Each process has its own memory space and can run its own event loop.
 
-For example, on a machine with four available CPU cores, a server might start four worker processes:
+For example, on a machine with four available CPU cores, a server might start several worker processes:
 
 ~~~text
                  Incoming connections
@@ -395,7 +397,7 @@ For example, on a machine with four available CPU cores, a server might start fo
               Core 1  Core 2 Core 3  Core 4
 ~~~
 
-Each worker runs its own event loop and manages the connections assigned to it. The operating system schedules the worker processes on available CPU cores.
+Each worker runs its own event loop and manages the connections assigned to it. The operating system schedules those processes across the available CPU cores; workers are not necessarily pinned to one particular core.
 
 The exact way connections reach workers depends on the server. A parent process might accept connections and pass them to workers, or workers might share a listening socket and let the operating system distribute incoming connections.
 
