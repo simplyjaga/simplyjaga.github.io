@@ -3,189 +3,188 @@ layout: post
 title: "From Blocking Sockets to Event Loops"
 date: 2026-11-03
 categories: [Systems]
-description: "How servers manage many connections, why event loops help, and how worker processes use multiple CPU cores."
+description: "A question-led explanation of how a server moves from blocking reads to an event loop, and how real servers use workers."
 toc:
-  - title: "How Can One Server Handle Multiple Clients?"
-    url: "#how-can-one-server-handle-multiple-clients"
+  - title: "Why does one idle client stop this server?"
+    url: "#why-does-one-idle-client-stop-this-server"
     children:
-      - title: "How does data reach the server?"
-        url: "#how-does-data-reach-the-server"
-      - title: "Why does a blocking server get stuck?"
-        url: "#why-does-a-blocking-server-get-stuck"
-      - title: "What should the server do instead?"
-        url: "#what-should-the-server-do-instead"
-      - title: "Which parts belong to the OS and Python?"
-        url: "#which-parts-belong-to-the-os-and-python"
-  - title: "Understanding the Event Loop"
-    url: "#understanding-the-event-loop"
+      - title: "What happens when a client connects?"
+        url: "#what-happens-when-a-client-connects"
+      - title: "Where does the server get stuck?"
+        url: "#where-does-the-server-get-stuck"
+      - title: "Can the OS accept data while the application is stuck?"
+        url: "#can-the-os-accept-data-while-the-application-is-stuck"
+  - title: "How does an event loop avoid waiting on one socket?"
+    url: "#how-does-an-event-loop-avoid-waiting-on-one-socket"
     children:
-      - title: "What are we waiting for?"
-        url: "#what-are-we-waiting-for"
-      - title: "How does the OS watch many sockets?"
-        url: "#how-does-the-os-watch-many-sockets"
-      - title: "Why must sockets be non-blocking?"
-        url: "#why-must-sockets-be-non-blocking"
-      - title: "How does the event loop handle clients?"
-        url: "#how-does-the-event-loop-handle-clients"
-      - title: "What if more sockets are ready than we can process?"
-        url: "#what-if-more-sockets-are-ready-than-we-can-process"
-      - title: "Can we build this in Python?"
-        url: "#can-we-build-this-in-python"
-  - title: "How Do Real Servers Use Event Loops?"
-    url: "#how-do-real-servers-use-event-loops"
+      - title: "What does socket readiness mean?"
+        url: "#what-does-socket-readiness-mean"
+      - title: "How does Linux report ready sockets?"
+        url: "#how-does-linux-report-ready-sockets"
+      - title: "Why combine readiness with non-blocking sockets?"
+        url: "#why-combine-readiness-with-non-blocking-sockets"
+      - title: "What happens when many sockets are ready?"
+        url: "#what-happens-when-many-sockets-are-ready"
+      - title: "Can we put these pieces together in Python?"
+        url: "#can-we-put-these-pieces-together-in-python"
+  - title: "How is this used by real servers?"
+    url: "#how-is-this-used-by-real-servers"
     children:
-      - title: "Where does the web server fit?"
-        url: "#where-does-the-web-server-fit"
-      - title: "What does the application server do?"
-        url: "#what-does-the-application-server-do"
-      - title: "Do both servers need an event loop?"
-        url: "#do-both-servers-need-an-event-loop"
-      - title: "Why use an event loop instead of threads?"
-        url: "#why-use-an-event-loop-instead-of-threads"
-      - title: "Can one event loop use multiple CPU cores?"
-        url: "#can-one-event-loop-use-multiple-cpu-cores"
+      - title: "What happens to an HTTP request?"
+        url: "#what-happens-to-an-http-request"
+      - title: "Why might the application server use threads?"
+        url: "#why-might-the-application-server-use-threads"
+      - title: "What if the event loop has CPU work to do?"
+        url: "#what-if-the-event-loop-has-cpu-work-to-do"
+      - title: "How do servers use more than one CPU core?"
+        url: "#how-do-servers-use-more-than-one-cpu-core"
 ---
 
-A server can have many clients connected at the same time. But how does one server process keep track of them without getting stuck waiting for one client?
+A server can have hundreds or thousands of clients connected to it. But consider a much smaller situation: one client connects and then sends nothing. Can that one idle client stop the server from serving everyone else?
 
-Let's start with what happens when a client sends data.
+To understand why this happens, let's follow a connection from the moment the server accepts it. Then we'll change just one thing: instead of reading from a particular client and waiting, we'll ask the operating system which sockets are ready.
 
-## How Can One Server Handle Multiple Clients? {#how-can-one-server-handle-multiple-clients}
+## Why does one idle client stop this server? {#why-does-one-idle-client-stop-this-server}
 
-### How does data reach the server? {#how-does-data-reach-the-server}
+### What happens when a client connects? {#what-happens-when-a-client-connects}
 
-Suppose Client A sends \`PING\`.
+Imagine a TCP server listening on port \`65432\`, and two clients, A and B.
 
-1. The client asks its operating system to send bytes through its socket.
-2. The operating system handles the TCP/IP work and sends the data over the network.
-3. The server's operating system receives the packets and places the data in the socket's receive buffer.
-4. The server application reads those bytes through the socket API. In Python, it might call \`recv()\`.
+The server creates a listening socket, binds it to the address and port, and calls \`listen()\`. The socket is now waiting for incoming TCP connections.
 
-The application does not read directly from the network interface. The operating system receives the network data; the application accesses it through the socket.
+When client A connects, the TCP handshake is handled by the operating system. Once the connection is established and ready for the application to accept, it is made available through the listening socket's pending connection queue.
 
-### Why does a blocking server get stuck? {#why-does-a-blocking-server-get-stuck}
+The server application obtains that connection by calling:
 
-Imagine a simple server that handles one client from beginning to end:
+~~~python
+client_socket, address = server_socket.accept()
+~~~
 
-1. Accept a connection.
-2. Read from that client.
-3. Process the request and respond.
-4. Wait for that client to disconnect.
-5. Accept the next connection.
+The returned \`client_socket\` is a new socket for communicating with client A. The original \`server_socket\` remains the listening socket; it is used to accept other connections.
 
-Now Client A connects but sends nothing. The server calls \`recv()\` and waits.
+That distinction matters: one listening socket can produce many connected client sockets. The server needs to keep track of those client sockets separately.
 
-While it waits, Clients B and C connect and send data. Their data can reach the operating system and sit in their socket receive buffers. But the application is still blocked reading from A.
+### Where does the server get stuck? {#where-does-the-server-get-stuck}
 
-**The OS has received data for B and C, but the server application is still waiting for A.**
+Consider this simplified server:
 
-The problem isn't that the operating system cannot receive multiple connections. It's that our application is waiting on one socket at a time.
+~~~python
+while True:
+    client, address = server.accept()
 
-### What should the server do instead? {#what-should-the-server-do-instead}
+    data = client.recv(1024)  # Wait for data from this client.
+    print(data)
 
-What if the server could ask:
+    client.close()
+~~~
 
-> Which of my sockets can I read from right now?
+Now follow what happens:
 
-Then it wouldn't have to call \`recv()\` on A and wait. It could read B if B has data, accept a new connection if one is waiting, and come back to A when A becomes ready.
+1. Client A connects. \`accept()\` returns A's connected socket.
+2. The server calls \`A.recv(1024)\`.
+3. A has not sent anything, so \`recv()\` waits.
+4. Client B connects. The server does not call \`accept()\` again because it is still inside A's \`recv()\`.
+5. Even if B sends data, this application does not get around to accepting B.
 
-That's the central idea behind an **event loop**: wait for activity across many sockets, then handle the sockets that are ready.
+The important point is not that the server has only one socket. It is that the only thread running this code is blocked inside a read from A.
 
-### Which parts belong to the OS and Python? {#which-parts-belong-to-the-os-and-python}
+### Can the OS accept data while the application is stuck? {#can-the-os-accept-data-while-the-application-is-stuck}
 
-Creating sockets, accepting connections, sending and receiving bytes, and waiting for I/O readiness all rely on operating-system facilities.
+Yes. The operating system and the server application are doing different parts of the work.
 
-Python gives us convenient interfaces to those facilities through modules such as \`socket\` and \`selectors\`. Other languages expose the same underlying capabilities through different APIs.
+When B connects, the operating system can complete the TCP handshake and place the connection in the listening socket's pending queue. When data arrives for an established connection, the OS handles the network traffic and places received bytes in that connection's receive buffer.
 
-We'll use Python for the examples because the code is easy to follow. The event-loop model itself is not specific to Python.
+But the application can only call \`recv()\` on B after it has accepted B and obtained B's connected socket. Our code is still waiting inside A's \`recv()\`.
 
----
+So there are two separate facts:
 
-## Understanding the Event Loop {#understanding-the-event-loop}
+- The operating system can make progress receiving network traffic for multiple connections.
+- Our application is not making progress on B because its thread is blocked reading A.
 
-We now have a better question: **how can the server wait for activity on many sockets without checking each one in turn?**
+We need a way to wait for activity across A, B, and the listening socket, rather than entering a blocking read on one client at a time.
 
-To answer that, we need to understand what the operating system can tell us.
+## How does an event loop avoid waiting on one socket? {#how-does-an-event-loop-avoid-waiting-on-one-socket}
 
-### What are we waiting for? {#what-are-we-waiting-for}
+### What does socket readiness mean? {#what-does-socket-readiness-mean}
 
-We're waiting for a socket to become **ready** for an operation.
+Instead of immediately calling \`recv()\` on A, imagine asking the OS:
 
-For example:
+**Among these sockets, which ones can I read from without waiting?**
 
-- A listening socket becomes readable when a new connection is waiting to be accepted.
-- A client socket becomes readable when data is available to read, or when the peer has disconnected.
-- A socket becomes writable when it can accept some more outgoing data without the write operation having to wait.
+The OS can report that a socket is *ready* for a particular operation.
 
-This is called **I/O readiness**.
+For a TCP server, the useful cases are:
 
-One important detail: readable does not mean a complete request has arrived. TCP is a byte stream. A request may arrive in pieces, so the application still needs to assemble and interpret those bytes.
+- The listening socket is readable when a connection is waiting to be accepted. We can call \`accept()\`.
+- A connected socket is readable when received bytes are available. It is also reported readable when the peer has closed its sending side, so we can discover the disconnect.
+- A connected socket is writable when the OS can accept some outgoing bytes without the write having to wait.
 
-### How does the OS watch many sockets? {#how-does-the-os-watch-many-sockets}
+This is called **I/O readiness**. It reports whether an operation can make progress now; it does not mean the application has received a complete request.
 
-On Unix-like systems, an open socket is represented to a process by a **file descriptor**—a small integer handle the process uses when asking the OS to perform operations on that socket.
+For example, a client might send an HTTP request in several TCP segments. A readable notification may mean that only the first part has arrived. TCP gives the application a stream of bytes, not one complete message per read. The application must keep the partial data and work out when the request is complete.
 
-So how can we watch many descriptors?
+### How does Linux report ready sockets? {#how-does-linux-report-ready-sockets}
 
-Linux provides an interface called **epoll**. Its job can be understood in three operations:
+On Linux, a process refers to an open socket using a **file descriptor**, usually a small integer such as \`4\` or \`7\`. When Python calls \`recv()\`, it ultimately asks the OS to read from the socket represented by that descriptor.
 
-- \`epoll_create1()\` creates an epoll instance: a place where the OS can track the descriptors we're interested in.
-- \`epoll_ctl()\` adds, modifies, or removes a descriptor and the events we want to watch.
-- \`epoll_wait()\` waits until one or more watched descriptors are ready, then returns the ready events.
+Linux provides **epoll** to monitor many file descriptors for readiness. It has three operations that are useful to understand:
 
-The key benefit is that our application waits for readiness across the registered descriptors instead of repeatedly trying to read from every client.
+1. \`epoll_create1()\` creates an epoll instance. Think of it as the OS object that holds the set of descriptors we want to monitor.
+2. \`epoll_ctl()\` adds a descriptor to that set, changes what events we want for it, or removes it.
+3. \`epoll_wait()\` waits until monitored descriptors have events to report. It returns the descriptors and the events that are ready.
 
-Other operating systems provide similar mechanisms, such as kqueue. Python's \`selectors\` module gives us a common interface across platforms. On Linux, \`selectors.DefaultSelector()\` normally uses epoll underneath.
+For our server, we would register the listening socket for read readiness. When a client connects, we accept it and register the new client socket for read readiness too. Later, \`epoll_wait()\` can report either the listening socket or any client socket whose state is ready.
 
-We can use that interface to learn the event loop without writing Linux-specific code.
+This means the application does not need to call \`recv()\` on every client just to discover that most of them have no data. It waits for the OS to report sockets that are ready.
 
-### Why must sockets be non-blocking? {#why-must-sockets-be-non-blocking}
+Linux is not the only system with a readiness mechanism. Other operating systems expose their own interfaces, such as kqueue on BSD-based systems. Python's \`selectors\` module provides a common interface for this kind of I/O multiplexing. On Linux, \`selectors.DefaultSelector()\` normally uses epoll underneath.
 
-Suppose the OS reports that Client B is ready to read. Before our program calls \`recv()\`, the available data might be consumed or the socket's state might change.
+We'll use \`selectors\` in Python. The OS still performs the readiness monitoring; Python gives us a convenient way to register sockets and receive the results.
 
-Readiness is a snapshot, not a promise. The socket's state can change before the read happens—for example, another thread may consume the available data. If the socket is blocking, our event-loop thread could then wait on B, bringing back the very problem we're trying to avoid.
+### Why combine readiness with non-blocking sockets? {#why-combine-readiness-with-non-blocking-sockets}
 
-A non-blocking socket behaves differently: if an operation cannot proceed immediately, it returns instead of waiting. In Python, that situation is reported as \`BlockingIOError\`.
+Suppose the OS reports that client B is readable. Our event loop then calls \`B.recv(1024)\`.
 
-So the two pieces work together:
+Why should B be non-blocking if the OS has already told us it is ready?
 
-- **Readiness notification** tells us which socket is worth trying.
-- **Non-blocking I/O** ensures the attempt won't hold up the event loop if the socket isn't ready anymore.
+Because readiness is a report about the socket's state when the OS checked it. It is not a reservation of the available bytes for our next read. The state can change before our code performs the operation. For example, another thread could read the available bytes first.
 
-### How does the event loop handle clients? {#how-does-the-event-loop-handle-clients}
+With a blocking socket, our event-loop thread could then wait inside \`recv()\`. While it waits, it cannot return to the loop to handle other ready sockets.
 
-Let's follow one pass through the loop.
+A non-blocking socket behaves differently. If the read cannot make progress immediately, it returns control instead of waiting. In Python, the operation raises \`BlockingIOError\`. The event loop catches that condition and moves on.
 
-1. Register the listening socket so we're notified when a connection is waiting.
-2. When a client connects, accept it and register its socket too.
-3. Wait for the OS to report ready sockets.
-4. If the listening socket is ready, accept a client. If a client socket is ready, read from it.
-5. Go back to waiting.
+Readiness and non-blocking mode solve different parts of the problem:
 
-That's the whole pattern: **wait, handle what's ready, repeat**.
+- Readiness tells the application which socket is worth trying.
+- Non-blocking mode prevents an individual read or write from holding up the event-loop thread if the socket is no longer ready.
 
-### What if more sockets are ready than we can process? {#what-if-more-sockets-are-ready-than-we-can-process}
+That is why we set connected sockets to non-blocking mode before using them in the event loop.
 
-Imagine 50 client sockets become ready at roughly the same time. The OS reports ready sockets to the event loop, and the loop processes the events returned by its polling call. It doesn't need to inspect every connected socket itself.
+### What happens when many sockets are ready? {#what-happens-when-many-sockets-are-ready}
 
-Now suppose another 60 sockets become ready while the loop is handling that first group. The loop finishes its current batch and asks the OS for events again. It can then receive those newly ready sockets too.
+Suppose 50 client sockets become readable. The OS reports ready events to the event loop, and the loop handles the events it receives.
 
-There are two details worth understanding:
+While it is handling those events, another 60 clients might become readable. The loop does not need to interrupt the current callback. It finishes the work it has chosen to do, then waits for events again. The OS can report sockets that are still ready, including sockets that were not returned in the earlier batch.
 
-- **The OS doesn't promise one giant list containing every ready socket.** Linux's `epoll_wait()` accepts a maximum number of events to return in one call. If more descriptors are ready, the remaining ones can be returned by later calls. Python's `selectors` API hides that low-level limit in our example.
-- **A socket that still has unread data remains ready in the usual level-triggered mode.** Linux epoll uses level-triggered mode by default, so if a socket wasn't handled in one batch—or still has data after a partial read—it can be reported again on a later wait. Edge-triggered mode has different rules: the application generally needs to keep reading until it gets `EAGAIN` (reported as `BlockingIOError` in Python).
+There are two Linux details behind this behaviour.
 
-What about fairness? The event loop must not spend all its time on one busy client. A practical server limits how much work it does for one connection in a single turn—for example, a maximum number of bytes or messages—then moves on to other ready connections. Readiness notification alone does not guarantee fair application-level processing.
+**First, one epoll wait does not have to return every ready descriptor.** \`epoll_wait()\` takes a maximum number of events to return in that call. If more descriptors are ready, the remaining ready descriptors can be returned by later calls. Python's \`selectors\` interface hides this low-level argument from our example.
 
-In our small Python example, each callback reads at most 1024 bytes and then returns to the loop. That keeps the work per event small. A production server needs more deliberate buffering and per-connection work limits.
+**Second, Linux epoll uses level-triggered mode by default.** If a socket still has unread bytes, it remains readable. If the event loop reads only part of those bytes, the socket can be reported as ready again on a later wait. This is useful because the application does not have to drain every byte in one callback.
 
-Now let's build it. Rather than presenting a large finished program and explaining it afterwards, we'll add each part when the story needs it.
+There is also an edge-triggered mode. With edge-triggered notification, the application generally needs to keep reading until the operation reports that it would block—\`EAGAIN\` at the OS level, exposed as \`BlockingIOError\` in Python. Otherwise, it may leave data unread and not receive another notification just because that data is still there.
 
-### Can we build this in Python? {#can-we-build-this-in-python}
+Now consider a different problem: one client is continuously sending data. If the event loop reads from that client forever before handling another socket, other clients can be delayed. The readiness API does not decide how much application work to do for each client. The server must make that decision.
 
-#### 1. How do we ask Python to watch sockets?
+A common approach is to limit the work done for one connection in a single turn—for example, read at most a fixed number of bytes, process a bounded number of messages, then return to the event loop. Our example below reads at most 1024 bytes each time it handles a client socket.
 
-First, create a selector and a non-blocking listening socket. The listening socket is the entry point for new clients.
+### Can we put these pieces together in Python? {#can-we-put-these-pieces-together-in-python}
+
+Python's \`selectors\` module lets us build the loop without calling epoll directly. We'll build the server in small pieces.
+
+#### 1. Which sockets should the selector watch?
+
+Create the selector and the listening socket. The listening socket must be non-blocking because it will be handled by the same event loop as the clients.
 
 ~~~python
 import selectors
@@ -202,13 +201,13 @@ server.setblocking(False)
 selector.register(server, selectors.EVENT_READ, data="server")
 ~~~
 
-The \`register()\` call tells the selector: "Notify me when this socket is ready for reading." For a listening socket, that means a connection is waiting.
+The last line registers the listening socket for read readiness. For this socket, a read event means a connection is waiting to be accepted.
 
-#### 2. What should happen when a client connects?
+The \`data\` argument lets us attach information to a registration. We'll use it to distinguish the listening socket from client sockets when events come back.
 
-When the listening socket becomes readable, we accept the connection. The new client socket must also be non-blocking, and we register it to watch for incoming data.
+#### 2. What do we do when the listening socket is ready?
 
-Add this function:
+A read event on the listening socket means we can try \`accept()\`. The returned socket is for the new client; it is not the listening socket.
 
 ~~~python
 def accept_client(server_socket):
@@ -219,35 +218,37 @@ def accept_client(server_socket):
     selector.register(client, selectors.EVENT_READ, data="client")
 ~~~
 
-We use the selector's \`data\` field to distinguish the listening socket from connected client sockets.
+We set the accepted socket to non-blocking mode and register it too. From this point, the selector can report when that client has data to read.
 
-#### 3. What should happen when a client sends data?
+#### 3. What do we do when a client socket is ready?
 
-When a client socket becomes readable, we try to receive the available bytes.
+Try to read the available bytes. Because the socket is non-blocking, the read will not wait if the socket is no longer ready.
 
 ~~~python
 def read_client(client):
     try:
         data = client.recv(1024)
     except BlockingIOError:
-        # It was no longer ready when we tried to read.
         return
 
     if data:
         print(f"Received: {data!r}")
     else:
-        # An empty result means the peer disconnected.
+        # recv() returns b"" when the peer has closed its sending side.
         selector.unregister(client)
         client.close()
 ~~~
 
-Why check for an empty result? Because \`recv()\` returning \`b""\` on a TCP socket means the peer has closed its sending side. We should stop monitoring that socket and close it.
+There are two possible results to notice:
 
-Also notice that \`recv(1024)\` reads *up to* 1024 bytes. It doesn't promise to return one complete application request.
+- If \`data\` contains bytes, we received some of the client's stream. It may be a whole message or only part of one.
+- If \`data\` is \`b""\`, the peer has closed its sending side. We remove the socket from the selector and close it.
 
-#### 4. How do we bring the pieces together?
+This handler reads no more than 1024 bytes per event. It does not loop until the client has no more data, so a continuously active client cannot keep this callback running indefinitely.
 
-We now have handlers for both kinds of sockets. The loop asks the selector for ready sockets and dispatches each one to the appropriate handler.
+#### 4. Where does the event loop happen?
+
+We now have one handler for the listening socket and one for client sockets. The loop waits for ready events and chooses the handler using the \`data\` value we registered earlier.
 
 ~~~python
 try:
@@ -264,161 +265,117 @@ finally:
     server.close()
 ~~~
 
-Put the three snippets together in the order shown: setup first, then the two handler functions, then the loop. You now have a small multi-client TCP server.
+\`selector.select()\` waits until at least one registered socket is ready, then returns the ready registrations. \`key.fileobj\` is the socket we registered. The loop accepts a new client when the listening socket is ready, or reads from a client when its socket is ready.
 
-Run it, then connect from two separate terminals:
+Put the setup, the two functions, and this loop in one Python file in that order. Run it, then open two terminals and connect from each:
 
 ~~~bash
 nc 127.0.0.1 65432
 ~~~
 
-Send text from either terminal. The server handles whichever socket is ready; it doesn't sit inside a read waiting for one particular client.
+Type some text in either terminal. The server prints data from whichever client has sent it. If one terminal stays idle, the server can still read from the other.
 
-This is deliberately a small example. It focuses on the event loop, not on building a complete network server. A production server also needs output buffering, write readiness, protocol framing, error handling, and graceful shutdown.
+This is a small demonstration of the mechanism, not a complete server. It has no response-writing path, output buffer, application-protocol parser, or robust handling for every socket error. Those need additional state and write-readiness handling. The point here is narrower: the event loop does not block waiting for data from one particular client.
 
-### So, what changed?
+## How is this used by real servers? {#how-is-this-used-by-real-servers}
 
-Our first server waited for a particular client and couldn't make progress while that client was idle.
+We've built a TCP server that watches its client sockets. But when you open a website, the process that accepts your browser connection may not be the process that runs the application's business logic.
 
-The event-loop version asks the operating system which sockets are ready, then performs non-blocking operations on those sockets.
+Let's follow one request to see where the event loop fits.
 
-**Instead of waiting for one client, we wait for whichever client is ready.**
+### What happens to an HTTP request? {#what-happens-to-an-http-request}
 
-That's the foundation of the event-loop model.
+Suppose your browser requests:
 
----
-
-## How Do Real Servers Use Event Loops? {#how-do-real-servers-use-event-loops}
-
-So far, we've looked at one server accepting connections directly from clients. Real applications often have more than one server component between the client and the code that performs the actual work.
-
-Let's look at that setup and see where event loops fit.
-
-### Where does the web server fit? {#where-does-the-web-server-fit}
-
-Imagine you open a website. Your browser sends an HTTP request. That request often reaches a **web server** such as Nginx first.
-
-A web server commonly handles work at the HTTP and connection layer:
-
-- Accepting connections from clients.
-- Reading and parsing incoming HTTP requests.
-- Managing connection details and timeouts.
-- Serving static files, when configured to do so.
-- Forwarding requests to an application server when application logic is needed.
-
-A request does not necessarily arrive in one neat piece. The HTTP headers or body may be delivered across multiple TCP reads. The web server must keep track of the bytes it has received and determine when it has enough information to process or forward the request.
-
-For example, Nginx can buffer a request before forwarding it, or stream parts of the request upstream, depending on its configuration. Either way, it must manage the incoming connection while data is arriving.
-
-This is one reason event-driven I/O is useful at the web-server layer: many clients may be connected, but only some of them have data to read or work to do at any particular moment.
-
-### What does the application server do? {#what-does-the-application-server-do}
-
-The web server usually doesn't contain all the business logic of an application. It forwards the request to an **application server**, such as a Java application running on Tomcat or a Python application served by Gunicorn.
-
-Tomcat, for example, can run a Java servlet that checks the request, calls application code, reads or updates a database, and builds the HTTP response. A Python application served by Gunicorn follows the same broad idea: application code handles the request and produces a response.
-
-The web server and application server communicate over another network connection. They might run on the same machine using different ports, or on separate machines.
-
-For example:
-
-~~~text
-Browser
-   |
-   | HTTP request
-   v
-Nginx (web server)
-   |
-   | upstream connection
-   v
-Tomcat (application server)
-   |
-   | database query
-   v
-Database
+~~~http
+GET /orders/42 HTTP/1.1
+Host: example.com
 ~~~
 
-The connection from the browser to Nginx and the connection from Nginx to Tomcat are separate connections. Each side manages its own sockets. Nginx does not hand its client socket or event loop to Tomcat; it sends the request over the upstream connection.
+A common deployment places a web server such as Nginx in front of an application server such as Tomcat.
 
-### Do both servers need an event loop? {#do-both-servers-need-an-event-loop}
+Nginx accepts the browser's TCP connection, reads the HTTP request, and decides what to do with it. If the request is for a static file that Nginx is configured to serve, it may return that file itself. If the request needs application logic, Nginx forwards it to the application server.
 
-No. The web server and application server make their own concurrency choices.
+Tomcat receives that forwarded request on a separate connection. A Java servlet can inspect the path \`/orders/42\`, call application code to fetch order 42, query a database, and construct the HTTP response. Tomcat then sends the response back to Nginx, which sends it to the browser.
 
-Nginx commonly uses an event-driven worker model to manage many client and upstream connections. But the application server behind it might use a thread-per-request or thread-pool model.
+The connections are distinct:
 
-For example:
+~~~text
+Browser  -- HTTP connection -->  Nginx
+Nginx    -- upstream connection -->  Tomcat
+Tomcat   -- database connection -->  Database
+~~~
 
-- **Event-driven web server + threaded application server:** Nginx manages network connections with an event loop, then Tomcat handles application requests using worker threads.
-- **Event-driven web server + asynchronous application server:** Nginx uses its event-driven model, and an async Python application server uses an event loop to manage its own connections and asynchronous work.
-- **Threaded web server + threaded application server:** both layers can use threads.
-- **Event-driven application server without a separate web-server layer:** an application server can also accept client connections directly.
+Nginx does not pass the browser's socket to Tomcat. Nginx reads from the browser socket and writes the request to its own upstream connection. Tomcat reads from that other connection.
 
-These are independent architectural decisions. Having an event loop in one layer does not require every other layer to use one.
+This distinction helps answer the next question: do Nginx and Tomcat have to use the same concurrency model? No. They are separate programs, managing separate connections, and can make different choices.
 
-### Why use an event loop instead of threads? {#why-use-an-event-loop-instead-of-threads}
+### Why might the application server use threads? {#why-might-the-application-server-use-threads}
 
-Let's return to the original problem: many clients connect, and most of the time they are waiting for something—more network data, a database response, or another service.
+Nginx commonly uses an event-driven worker model for network connections. Tomcat can instead use a pool of worker threads to process incoming requests.
 
-One approach is to assign a thread to each client. When that client waits for I/O, its thread blocks, and the operating system can schedule another thread.
+Imagine two requests arrive at Tomcat:
 
-That model is straightforward, especially when the code is written in a blocking style. But a large number of mostly idle connections can mean a large number of threads. Threads need stack memory, scheduling, and coordination. Context switching between many threads also has a cost.
+- Request A needs a database query that takes 200 milliseconds.
+- Request B needs a database query that takes 10 milliseconds.
 
-An event loop takes a different approach:
+With a worker-thread model, Tomcat can assign A to one thread and B to another. Thread A may block while waiting for the database. During that wait, the operating system can schedule thread B, which can continue processing its request.
 
-1. Keep track of many sockets.
-2. Ask the operating system which ones are ready.
-3. Run the handler for a ready socket.
-4. If more I/O is needed, don't block the event-loop thread waiting for it. Return to the loop so it can handle other ready sockets.
-5. When the OS reports that more data is ready, continue that connection's work. Async runtimes can suspend and resume coroutines; callback-based loops keep the connection's state separately.
+This is convenient because application code can be written in a direct, sequential style: call the database, wait for the result, then build the response. The waiting thread is not available to process another request during that time, but other worker threads can do so.
 
-This can support many concurrent I/O connections with far fewer threads.
+The trade-off is that threads consume memory and need to be scheduled. A server cannot create an unlimited number of worker threads. It uses a bounded pool and must decide what happens when all workers are busy.
 
-Let's make the trade-off concrete.
+An event-loop-based application server makes a different choice. When an asynchronous database operation starts, the handler can suspend instead of blocking the event-loop thread. The loop can then handle another ready connection. When the database operation completes, the runtime makes the suspended work runnable again.
 
-- **Event loop:** Nginx may keep thousands of client connections open, even though most clients are idle or only occasionally sending data. An event-driven worker can watch those sockets without dedicating one thread to every connection.
-- **Threads:** A traditional Tomcat application can assign incoming servlet requests to a pool of worker threads. The code can use ordinary blocking JDBC calls; while one thread waits for the database, other threads can handle other requests.
-- **CPU-heavy work:** Imagine a Python async server that generates a large PDF or resizes a batch of images directly inside an event-loop handler. While that calculation runs, the loop cannot handle another socket event. A common solution is to send that job to a process pool and let the event loop continue handling network I/O.
+Neither model removes the database's 200-millisecond wait. They differ in what the server's execution thread does during that wait.
 
-The same issue appears with database access: if an async handler makes a blocking database call on the event-loop thread, the loop stalls until the call returns. Use an asynchronous database client, or run the blocking call in a worker thread instead.
+### What if the event loop has CPU work to do? {#what-if-the-event-loop-has-cpu-work-to-do}
 
-So the choice is not "event loops are always faster." Nginx's connection handling, a Tomcat request worker, and a CPU-heavy image-processing job have different needs. Real systems often combine event loops with thread or process pools.
+An event loop is useful when a task spends much of its time waiting for I/O. It does not make CPU work disappear.
 
-### Can one event loop use multiple CPU cores? {#can-one-event-loop-use-multiple-cpu-cores}
+Imagine an asynchronous Python request handler that receives a request to resize 500 large images. If it performs all the image processing directly inside the event-loop thread, that thread is busy calculating pixels. It cannot return to the loop to process socket events for other clients until the calculation finishes.
 
-There is one more question. If an event loop handles many clients, does that mean it can use all the CPU cores in the machine?
+The same problem occurs if an asynchronous handler calls a blocking database library. The function waits for the database without yielding control to the event loop, so the loop is stuck for the duration of that call.
 
-Not by itself.
+The usual fix depends on the work:
 
-A single event loop usually runs on one thread. At any given moment, that thread executes its event-handling code on one CPU core. It can keep many I/O operations in progress, but it does not execute multiple pieces of Python code in parallel just because many clients are connected.
+- Use an asynchronous database or network client when the operation is I/O-bound and has an async interface.
+- Run blocking I/O calls in a worker thread when an asynchronous equivalent is not available.
+- Move CPU-heavy work, such as image processing, to a process pool so it can run outside the event-loop thread.
 
-To use multiple cores, servers commonly run **multiple worker processes**. Each process has its own memory space and can run its own event loop.
+This is why an event-loop server may still use threads or processes. The event loop manages socket readiness; worker threads or processes handle work that should not block that loop.
 
-For example, on a machine with four available CPU cores, a server might start several worker processes:
+### How do servers use more than one CPU core? {#how-do-servers-use-more-than-one-cpu-core}
 
-| Worker process | What runs inside it |
-|---|---|
-| Worker 1 | Event loop 1 |
-| Worker 2 | Event loop 2 |
-| Worker 3 | Event loop 3 |
-| ... | ... |
+One event loop usually runs on one thread. That thread can switch between many connections as their I/O becomes ready, but it executes one piece of its code at a time. Having 1,000 sockets registered with the loop does not mean 1,000 pieces of Python code are running in parallel.
 
-The operating system schedules these worker processes across the available CPU cores.
+To run work on multiple CPU cores, a server can start multiple worker processes. Each process has its own memory space and can run its own event loop.
 
-In Nginx, a master process starts and manages worker processes. Each worker runs its own event loop and accepts or handles client connections. The operating system schedules runnable workers across available CPU cores; a worker is not necessarily pinned to one particular core. The table is a simplified view: the exact way connections are distributed depends on the server configuration and operating-system behavior.
+Nginx uses a master-and-worker process model. The master process starts and manages worker processes. Each worker handles connections using its own event loop. The operating system schedules runnable workers on available CPU cores; a worker is not automatically tied to one particular core.
 
-The exact way connections reach workers depends on the server. A parent process might accept connections and pass them to workers, or workers might share a listening socket and let the operating system distribute incoming connections.
+A simplified view is:
 
-This gives us two levels of concurrency:
+~~~text
+Nginx master process
+    |
+    +-- Worker process 1 -- Event loop 1
+    |
+    +-- Worker process 2 -- Event loop 2
+    |
+    +-- Worker process 3 -- Event loop 3
+~~~
 
-- **Within one worker:** its event loop interleaves work across many connections without needing one thread per connection.
-- **Across workers:** multiple processes can run in parallel on different CPU cores.
+The workers can run on different cores at the same time. How incoming connections are shared among workers depends on the server's configuration and the way its listening sockets are set up.
 
-The same idea applies to application servers, although their worker models differ. Some use multiple processes, some use thread pools, and some combine processes with asynchronous event loops.
+There are therefore two different kinds of concurrency in this design:
 
-One final distinction matters: multiple event loops do not automatically share application state. Separate processes have separate memory spaces, so they need an explicit way to share data when required—for example, through a database, cache, or message broker.
+- Inside one worker, its event loop takes turns handling I/O for many connections.
+- Across worker processes, the operating system can run different workers in parallel on different CPU cores.
+
+Because processes have separate memory spaces, worker 1 cannot directly read a Python object stored in worker 2's memory. If workers need to share application data, they need an explicit mechanism such as shared memory, a database, a cache, or a message broker.
 
 ---
 
-An event loop solves the problem of waiting efficiently for many I/O operations. Multiple worker processes take that model across CPU cores. And in a real application, the web server and application server can each choose the concurrency model that fits their own responsibilities.
+We started with one blocking call: \`recv()\`. While it waited for client A, the server's application thread could not accept or read from client B.
 
-The important idea is not that every server must use an event loop. It's understanding **what is waiting, who is waiting for it, and how the system keeps making progress while it waits.**
+An event loop changes where the waiting happens. The application asks the OS to report which sockets are ready, then handles those sockets using non-blocking operations. Real servers use that technique for connection handling, and combine it with threads or worker processes when application work needs a different execution model.
