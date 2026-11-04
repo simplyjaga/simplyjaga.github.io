@@ -368,7 +368,7 @@ But an event loop is not automatically better in every situation:
 - **Threads** can make blocking code easier to write and can be a good fit when the workload and connection count are manageable.
 - **CPU-heavy work** is different. If an event-loop handler spends a long time calculating, it prevents that loop from handling other events until it finishes.
 
-So the choice is not simply "event loops are faster than threads." It depends on the workload, the runtime, and how the application is structured. Many real systems combine both: an event loop for network I/O and a thread or process pool for work that should not run on the event-loop thread.
+So the choice is not simply "event loops are faster than threads." It depends on the workload, the runtime, and how the application is structured. Many real systems combine both: an event loop for network I/O and a thread or process pool for work that should not run on the event-loop thread. The same rule applies to database calls: if an application uses a blocking database client directly on the event-loop thread, that call can stall the loop too. It needs an asynchronous client or to run outside the loop.
 
 ### Can one event loop use multiple CPU cores? {#can-one-event-loop-use-multiple-cpu-cores}
 
@@ -397,7 +397,7 @@ For example, on a machine with four available CPU cores, a server might start se
               Core 1  Core 2 Core 3  Core 4
 ~~~
 
-Each worker runs its own event loop and manages the connections assigned to it. The operating system schedules those processes across the available CPU cores; workers are not necessarily pinned to one particular core.
+This is broadly how Nginx is structured: a master process starts and manages worker processes, and each worker handles connections using an event-driven loop. Each worker runs its own event loop and manages the connections assigned to it. The operating system schedules those processes across the available CPU cores; workers are not necessarily pinned to one particular core.
 
 The exact way connections reach workers depends on the server. A parent process might accept connections and pass them to workers, or workers might share a listening socket and let the operating system distribute incoming connections.
 
