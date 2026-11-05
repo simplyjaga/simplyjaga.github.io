@@ -44,7 +44,7 @@ A server can have hundreds or thousands of clients connected to it. But consider
 
 This article documents what I worked through while learning from **Arpit Bhayani's Redis Internals architecture series**. These are my own notes and explanations of the concepts, written as questions I had while trying to understand how the server works.
 
-To follow the same progression in the video, start with the [single-client blocking server example](https://youtu.be/SMmLVHgE4pM?t=0), then jump to the [event-loop example that handles multiple clients](https://youtu.be/SMmLVHgE4pM?t=1340).
+The concepts in this article follow **[Arpit Bhayani's Redis Internals architecture playlist](https://youtube.com/playlist?list=PLsdq-3Z1EPT36NJXTutvKcreetuHCr9a-&si=550Xr6Vl8MT87ZEJ)**. This article documents what I worked through while learning from that series. These are my own notes and explanations, written as questions I had while trying to understand how the server works.
 
 To understand why the first server gets stuck, let's follow a connection from the moment the server accepts it. Then we'll change how it waits: instead of reading from a particular client and blocking, we'll ask the operating system which sockets are ready.
 
@@ -81,6 +81,8 @@ while True:
 
     client.close()
 ~~~
+
+For a visual walkthrough of this exact single-client blocking pattern, see the [single-client server example in the video](https://youtu.be/SMmLVHgE4pM?t=0&si=5dmKgRLJSUt0_aYK). Watch what happens when the client connects and then waits before sending data.
 
 Now follow what happens:
 
@@ -278,6 +280,8 @@ nc 127.0.0.1 65432
 ~~~
 
 Type some text in either terminal. The server prints data from whichever client has sent it. If one terminal stays idle, the server can still read from the other.
+
+The [event-loop example handling multiple clients](https://youtu.be/SMmLVHgE4pM?t=1340&si=RY_5pW9q9ZpodtGU) is a useful visual companion here: it shows the concurrent-client behaviour in the terminal after the event loop is introduced.
 
 This is a small demonstration of the mechanism, not a complete server. It has no response-writing path, output buffer, application-protocol parser, or robust handling for every socket error. Those need additional state and write-readiness handling. The point here is narrower: the event loop does not block waiting for data from one particular client.
 
