@@ -42,7 +42,11 @@ toc:
 
 A server can have hundreds or thousands of clients connected to it. But consider a much smaller situation: one client connects and then sends nothing. Can that one idle client stop the server from serving everyone else?
 
-To understand why this happens, let's follow a connection from the moment the server accepts it. Then we'll change just one thing: instead of reading from a particular client and waiting, we'll ask the operating system which sockets are ready.
+This article documents what I worked through while learning from **Arpit Bhayani's Redis Internals architecture series**. These are my own notes and explanations of the concepts, written as questions I had while trying to understand how the server works.
+
+To follow the same progression in the video, start with the [single-client blocking server example](https://youtu.be/SMmLVHgE4pM?t=0), then jump to the [event-loop example that handles multiple clients](https://youtu.be/SMmLVHgE4pM?t=1340).
+
+To understand why the first server gets stuck, let's follow a connection from the moment the server accepts it. Then we'll change how it waits: instead of reading from a particular client and blocking, we'll ask the operating system which sockets are ready.
 
 ## Why does one idle client stop this server? {#why-does-one-idle-client-stop-this-server}
 
