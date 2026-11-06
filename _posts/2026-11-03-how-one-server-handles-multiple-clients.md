@@ -143,25 +143,6 @@ This means the application does not need to call \`recv()\` on every client just
 
 Linux is not the only system with a readiness mechanism. Other operating systems expose their own interfaces, such as kqueue on BSD-based systems. Python's \`selectors\` module provides a common interface for this kind of I/O multiplexing. On Linux, \`selectors.DefaultSelector()\` normally uses epoll underneath.
 
-### Why combine readiness with non-blocking sockets? {#why-combine-readiness-with-non-blocking-sockets}
-
-Suppose the OS reports that client B is readable. Our event loop then calls \`B.recv(1024)\`.
-
-Why should B be non-blocking if the OS has already told us it is ready?
-
-Because readiness is a report about the socket's state when the OS checked it. It is not a reservation of the available bytes for our next read. The state can change before our code performs the operation. For example, another thread could read the available bytes first.
-
-With a blocking socket, our event-loop thread could then wait inside \`recv()\`. While it waits, it cannot return to the loop to handle other ready sockets.
-
-A non-blocking socket behaves differently. If the read cannot make progress immediately, it returns control instead of waiting. In Python, the operation raises \`BlockingIOError\`. The event loop catches that condition and moves on.
-
-Readiness and non-blocking mode solve different parts of the problem:
-
-- Readiness tells the application which socket is worth trying.
-- Non-blocking mode prevents an individual read or write from holding up the event-loop thread if the socket is no longer ready.
-
-That is why we set connected sockets to non-blocking mode before using them in the event loop.
-
 ### What happens when many sockets are ready? {#what-happens-when-many-sockets-are-ready}
 
 Suppose 50 client sockets become readable. The OS reports ready events to the event loop, and the loop handles the events it receives.
@@ -198,7 +179,7 @@ server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind(("127.0.0.1", 65432))
 server.listen()
-server.setblocking(False)
+server.setblocking(False)  # accept() won't wait if no connection is ready.
 
 selector.register(server, selectors.EVENT_READ, data="server")
 ~~~
@@ -216,7 +197,7 @@ def accept_client(server_socket):
     client, address = server_socket.accept()
     print(f"Connected: {address}")
 
-    client.setblocking(False)
+    client.setblocking(False)  # recv() won't wait if no data is ready.
     selector.register(client, selectors.EVENT_READ, data="client")
 ~~~
 
