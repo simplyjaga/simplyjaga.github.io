@@ -44,6 +44,8 @@ A server can have hundreds or thousands of clients connected to it. But consider
 
 Reference: [Arpit Bhayani's Redis Internals architecture playlist](https://youtube.com/playlist?list=PLsdq-3Z1EPT36NJXTutvKcreetuHCr9a-&si=550Xr6Vl8MT87ZEJ).
 
+Code examples use Python.
+
 ## Why does one idle client stop this server? {#why-does-one-idle-client-stop-this-server}
 
 ### What happens when a client connects? {#what-happens-when-a-client-connects}
@@ -140,8 +142,6 @@ For our server, we would register the listening socket for read readiness. When 
 This means the application does not need to call \`recv()\` on every client just to discover that most of them have no data. It waits for the OS to report sockets that are ready.
 
 Linux is not the only system with a readiness mechanism. Other operating systems expose their own interfaces, such as kqueue on BSD-based systems. Python's \`selectors\` module provides a common interface for this kind of I/O multiplexing. On Linux, \`selectors.DefaultSelector()\` normally uses epoll underneath.
-
-We'll use \`selectors\` in Python. The OS still performs the readiness monitoring; Python gives us a convenient way to register sockets and receive the results.
 
 ### Why combine readiness with non-blocking sockets? {#why-combine-readiness-with-non-blocking-sockets}
 
