@@ -155,8 +155,6 @@ There are two Linux details behind this behaviour.
 
 **Second, Linux epoll uses level-triggered mode by default.** If a socket still has unread bytes, it remains readable. If the event loop reads only part of those bytes, the socket can be reported as ready again on a later wait. This is useful because the application does not have to drain every byte in one callback.
 
-There is also an edge-triggered mode. With edge-triggered notification, the application generally needs to keep reading until the operation reports that it would block—\`EAGAIN\` at the OS level, exposed as \`BlockingIOError\` in Python. Otherwise, it may leave data unread and not receive another notification just because that data is still there.
-
 Now consider a different problem: one client is continuously sending data. If the event loop reads from that client forever before handling another socket, other clients can be delayed. The readiness API does not decide how much application work to do for each client. The server must make that decision.
 
 A common approach is to limit the work done for one connection in a single turn—for example, read at most a fixed number of bytes, process a bounded number of messages, then return to the event loop. Our example below reads at most 1024 bytes each time it handles a client socket.
