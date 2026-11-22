@@ -59,13 +59,21 @@ toc:                            # optional but conventional — see below
 - Inline `<script>` in `post.html` handles the mobile TOC toggle; there is no
   other JavaScript.
 
-## Local preview (optional)
+## Local preview
 
-Requires a Jekyll install (`gem install jekyll bundler`), then:
+The author's machine has no Ruby/Jekyll installed and system packages should
+not be installed without asking. To preview, emulate the build with Python:
 
-```
-jekyll serve
-```
+- Parse each post's YAML front matter and render the body with
+  `python-markdown` (extensions: `fenced_code`, `tables`, `attr_list`,
+  `sane_lists`) — installed via `pip install --user` (lands in `~/.local`).
+- Wrap output in the `default.html`/`post.html` layouts (TOC sidebar is built
+  from the post's `toc` front matter), write to a temp dir, and serve with
+  `python3 -m http.server`.
+- Note: kramdown renders `` \`code\` `` as literal backticks (this is
+  intentional — inline code uses visible backticks on the site).
+
+If Jekyll is ever available, `jekyll serve` also works.
 
 ## Git workflow
 
