@@ -90,11 +90,13 @@ main { min-height: 70vh; }
   top: 28px;
   max-height: calc(100vh - 56px);
   overflow-y: auto;
+  scrollbar-width: none;
   padding: 54px 0 24px;
   font-family: Arial, sans-serif;
   font-size: 13px;
   line-height: 1.5;
 }
+.article-toc::-webkit-scrollbar { display: none; }
 .toc-toggle {
   display: none;
   border: 0;
