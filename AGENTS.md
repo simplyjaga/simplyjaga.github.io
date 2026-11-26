@@ -70,6 +70,13 @@ not be installed without asking. To preview, emulate the build with Python:
 - Wrap output in the `default.html`/`post.html` layouts (TOC sidebar is built
   from the post's `toc` front matter), write to a temp dir, and serve with
   `python3 -m http.server`.
+
+Ready-made scripts (also in `/tmp/blog_preview.py` + `/tmp/serve_preview.sh`):
+
+```bash
+bash scripts/serve_preview.sh   # rebuilds and (re)starts preview on :4000
+python3 scripts/render_preview.py  # render only, output -> /tmp/blog_preview_site
+```
 - Note: kramdown renders `` \`code\` `` as literal backticks (this is
   intentional — inline code uses visible backticks on the site).
 
