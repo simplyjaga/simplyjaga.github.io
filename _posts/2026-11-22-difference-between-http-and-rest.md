@@ -150,4 +150,6 @@ Just as \`http://\` becomes \`https://\` when TLS is added, Redis connection str
 
 These URLs are passed to a Redis client library in backend code (such as ioredis, redis-py, or go-redis), not typed into a browser.
 
+---
+
 The takeaway: each layer makes one decision, and none of them forces the others. TLS can encrypt any TCP protocol. HTTP can carry any body format. And REST is just one specification among several—nothing forces it onto HTTP, JSON, or any particular storage engine.

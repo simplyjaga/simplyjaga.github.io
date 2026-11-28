@@ -44,11 +44,17 @@ toc:                            # optional but conventional — see below
 ```
 
 - The `toc` is **hand-authored** front matter, not generated from headings.
-  Keep it in sync with the post's `##`/`###` headings. kramdown auto-generates
-  heading anchors as lowercase-hyphenated text (e.g. `## Why does X?` → `#why-does-x`).
+  Keep it in sync with the post's `##`/`###` headings. Give every heading an
+  explicit anchor, as all posts do: `## Why does X? {#why-does-x}`. The local
+  preview script does not auto-generate anchors, so TOC links only work with
+  explicit `{#id}`s.
 - **Writing style convention**: posts are "question-led" — section headings are
   phrased as questions the reader would ask ("Why does one idle client stop
   this server?"). Match this style.
+- **Ending convention**: every post ends with a horizontal rule (`---`)
+  followed by short closing notes with no heading: a recap or "The
+  takeaway: ..." paragraph that ties the post back to its opening question.
+  Don't end with a "Summary"/"Conclusion" section in the TOC.
 
 ## Conventions
 
@@ -77,6 +83,10 @@ Ready-made scripts (also in `/tmp/blog_preview.py` + `/tmp/serve_preview.sh`):
 bash scripts/serve_preview.sh   # rebuilds and (re)starts preview on :4000
 python3 scripts/render_preview.py  # render only, output -> /tmp/blog_preview_site
 ```
+
+**Always use port 4000** (`http://127.0.0.1:4000`) — do not pick a different
+port per session; `serve_preview.sh` kills any existing server on :4000 and
+restarts it there.
 - Note: kramdown renders `` \`code\` `` as literal backticks (this is
   intentional — inline code uses visible backticks on the site).
 
